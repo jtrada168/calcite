@@ -123,6 +123,7 @@ import org.apache.calcite.tools.Programs;
 import org.apache.calcite.tools.RelBuilder;
 import org.apache.calcite.tools.RuleSet;
 import org.apache.calcite.tools.RuleSets;
+import org.apache.calcite.util.DateString;
 import org.apache.calcite.util.ImmutableBitSet;
 
 import com.google.common.collect.ImmutableList;
@@ -7443,5 +7444,44 @@ class RelOptRulesTest extends RelOptTestBase {
         .withFactory(f -> f.withTypeFactoryFactory(typeFactoryFactory))
         .withRule(CoreRules.AGGREGATE_EXPAND_DISTINCT_AGGREGATES_TO_JOIN)
         .check();
+  }
+
+  /**
+   * Reduce expression rules should identify constants with IS_NOT_DISTINCT_FROM operator as well.
+   */
+  @Test public void testProjectReduceExpressionsWithIsNotDistinctFrom() {
+
+    // Build a rel equivalent to sql:
+    // SELECT hiredate from emp where hiredate is not distinct from '2020-12-11'
+
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      final RexExecutorImpl executor =
+          new RexExecutorImpl(DataContexts.EMPTY);
+      b.getCluster().getPlanner().setExecutor(executor);
+      final RexBuilder rexB = b.getRexBuilder();
+
+      final RexNode dateLiteral = rexB.makeDateLiteral(new DateString(2020, 12, 11));
+
+      RexNode dateInput4 = rexB.makeInputRef(
+          rexB.getTypeFactory().createTypeWithNullability(
+              rexB.getTypeFactory().createSqlType(SqlTypeName.DATE), true), 4);
+
+      final RexNode filterCond = rexB.makeCall(SqlStdOperatorTable.IS_NOT_DISTINCT_FROM,
+          dateInput4,
+          dateLiteral);
+
+      return b.scan("EMP")
+          .filter(filterCond)
+          .project(dateInput4)
+          .build();
+    };
+
+    HepProgram program = new HepProgramBuilder()
+        .addRuleInstance(CoreRules.PROJECT_REDUCE_EXPRESSIONS)
+        .build();
+
+    HepPlanner hepPlanner = new HepPlanner(program);
+    relFn(relFn).withPlanner(hepPlanner).check();
+
   }
 }
